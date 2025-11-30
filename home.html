@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Optimization Visualizer: LP to Story</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
+        
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #0f172a; /* Slate 900 */
+            font-family: 'Inter', sans-serif;
+            user-select: none;
+        }
+
+        #canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 0;
+        }
+
+        .ui-layer {
+            position: absolute;
+            z-index: 10;
+            pointer-events: none;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: 2rem;
+        }
+
+        .controls {
+            pointer-events: auto;
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+
+        .node {
+            position: absolute;
+            width: 100px;
+            height: 100px;
+            border-radius: 50%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-weight: 800;
+            font-size: 1.2rem;
+            color: white;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+            z-index: 5;
+            backdrop-filter: blur(4px);
+            border: 2px solid rgba(255,255,255,0.1);
+            /* Removed cursor: grab and active scaling */
+        }
+
+        .node.lp {
+            background: radial-gradient(circle at 30% 30%, #60a5fa, #2563eb);
+        }
+
+        .node.story {
+            background: radial-gradient(circle at 30% 30%, #34d399, #059669);
+        }
+
+        /* Button Styles */
+        .btn {
+            background: white;
+            color: #0f172a;
+            padding: 1rem 2rem;
+            border-radius: 9999px;
+            font-weight: bold;
+            font-size: 1.2rem;
+            border: none;
+            cursor: pointer;
+            box-shadow: 0 4px 15px rgba(255, 255, 255, 0.1);
+            transition: all 0.2s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(255, 255, 255, 0.2);
+            background: #f8fafc;
+        }
+
+        .btn:active {
+            transform: translateY(0);
+        }
+
+        .status-badge {
+            background: rgba(15, 23, 42, 0.8);
+            border: 1px solid rgba(255,255,255,0.2);
+            color: #94a3b8;
+            padding: 0.5rem 1rem;
+            border-radius: 1rem;
+            font-size: 0.9rem;
+            margin-top: 1rem;
+            display: inline-block;
+            backdrop-filter: blur(10px);
+        }
+        
+        .status-badge.optimized {
+            color: #34d399;
+            border-color: #34d399;
+        }
+
+        .title-area {
+            pointer-events: auto;
+        }
+    </style>
+</head>
+<body>
+
+    <canvas id="canvas"></canvas>
+    
+    <!-- Nodes will be injected here by JS -->
+    <div id="node-container"></div>
+
+    <div class="ui-layer">
+        <div class="title-area">
+            <h1 class="text-4xl font-bold text-white tracking-tight mb-2">Prep Optimization</h1>
+            <p class="text-slate-400 max-w-md">Click the button to optimize your interview stories.</p>
+        </div>
+
+        <div class="controls">
+            <div id="status" class="status-badge mb-4">Current State: Many-to-Many (Chaotic)</div>
+            <br>
+            <button id="toggleBtn" class="btn">
+                <span id="btnIcon">✨</span>
+                <span id="btnText">Optimize Connections</span>
+            </button>
+        </div>
+    </div>
+
+<script>
+/**
+ * Configuration
+ */
+const CONFIG = {
+    nodeCount: 5,
+    nodeRadius: 50,
+    colSpacing: 0.6, // Percentage of screen width between columns
+    chaosLinesPerNode: 3
+};
+
+/**
+ * State Management
+ */
+const state = {
+    mode: 'chaos', // 'chaos' or 'optimized'
+    nodes: [],
+    lines: [],
+    width: window.innerWidth,
+    height: window.innerHeight
+};
+
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const nodeContainer = document.getElementById('node-container');
+const toggleBtn = document.getElementById('toggleBtn');
+const statusBadge = document.getElementById('status');
+const btnText = document.getElementById('btnText');
+
+/**
+ * Resize Handler
+ */
+function resize() {
+    state.width = window.innerWidth;
+    state.height = window.innerHeight;
+    canvas.width = state.width;
+    canvas.height = state.height;
+    
+    // Recalculate positions
+    const lpX = state.width * ((1 - CONFIG.colSpacing) / 2);
+    const storyX = state.width * (1 - (1 - CONFIG.colSpacing) / 2);
+    
+    state.nodes.forEach(node => {
+        const x = node.type === 'LP' ? lpX : storyX;
+        const spacing = state.height / (CONFIG.nodeCount + 1);
+        const y = spacing * (node.index + 1);
+        
+        // Set static position
+        node.x = x;
+        node.y = y;
+        
+        // Update DOM immediately
+        node.el.style.transform = `translate(${x - CONFIG.nodeRadius}px, ${y - CONFIG.nodeRadius}px)`;
+    });
+
+    // Redraw canvas after resize
+    draw();
+}
+window.addEventListener('resize', resize);
+
+/**
+ * Node Class
+ */
+class Node {
+    constructor(type, index) {
+        this.type = type; // 'LP' or 'Story'
+        this.index = index;
+        
+        // Static position
+        this.x = 0;
+        this.y = 0;
+        
+        // Create DOM Element
+        this.el = document.createElement('div');
+        this.el.className = `node ${type.toLowerCase()}`;
+        this.el.innerText = `${type}${index}`;
+        
+        // Removed all drag listeners
+        
+        nodeContainer.appendChild(this.el);
+    }
+}
+
+/**
+ * Initialization
+ */
+function init() {
+    // Create LP Nodes
+    for (let i = 0; i < CONFIG.nodeCount; i++) {
+        state.nodes.push(new Node('LP', i));
+    }
+    // Create Story Nodes
+    for (let i = 0; i < CONFIG.nodeCount; i++) {
+        state.nodes.push(new Node('Story', i));
+    }
+
+    resize(); // Set initial positions
+    generateChaosLines();
+    draw();
+}
+
+/**
+ * Line Logic
+ */
+function generateChaosLines() {
+    state.lines = [];
+    const lps = state.nodes.filter(n => n.type === 'LP');
+    const stories = state.nodes.filter(n => n.type === 'Story');
+
+    lps.forEach(lp => {
+        let targets = [];
+        // Consistent chaos: seed random based on indices to make it look the same if we reload
+        // But simple Math.random is fine here as long as we don't regenerate constantly
+        const count = 2 + (lp.index % 2); // 2 or 3 connections
+        
+        // Create a pseudo-random selection based on index to ensure variety
+        for(let i=0; i<count; i++) {
+            const targetIndex = (lp.index + i * 2 + 1) % stories.length;
+            const story = stories[targetIndex];
+            if(!targets.includes(story)) targets.push(story);
+        }
+
+        targets.forEach(story => {
+            state.lines.push({ from: lp, to: story });
+        });
+    });
+}
+
+function generateOptimizedLines() {
+    state.lines = [];
+    const lps = state.nodes.filter(n => n.type === 'LP');
+    const stories = state.nodes.filter(n => n.type === 'Story');
+
+    // One to One: LP[i] -> Story[i]
+    for(let i=0; i<lps.length; i++) {
+        state.lines.push({ from: lps[i], to: stories[i] });
+    }
+
+    // Additional edges requested
+    if (lps.length > 0 && stories.length > 2) {
+        state.lines.push({ from: lps[0], to: stories[2] });
+    }
+    if (lps.length > 3 && stories.length > 1) {
+        state.lines.push({ from: lps[3], to: stories[1] });
+    }
+}
+
+/**
+ * Toggle Function
+ */
+toggleBtn.addEventListener('click', () => {
+    if (state.mode === 'chaos') {
+        // Switch to Optimized
+        state.mode = 'optimized';
+        generateOptimizedLines();
+        
+        // UI Update
+        statusBadge.innerHTML = "Current State: <span style='color:#34d399'>One-to-One (Optimized)</span>";
+        statusBadge.classList.add('optimized');
+        btnText.innerText = "Reset to Chaos";
+    } else {
+        // Switch to Chaos
+        state.mode = 'chaos';
+        generateChaosLines();
+        
+        // UI Update
+        statusBadge.innerHTML = "Current State: Many-to-Many (Chaotic)";
+        statusBadge.classList.remove('optimized');
+        btnText.innerText = "Optimize Connections";
+    }
+    
+    // Trigger redraw
+    draw();
+});
+
+/**
+ * Drawing
+ */
+function drawArrow(ctx, fromX, fromY, toX, toY, color, width) {
+    const headlen = 15; 
+    const angle = Math.atan2(toY - fromY, toX - fromX);
+    
+    // Adjust end point to stop at circle edge
+    const dist = Math.sqrt((toX-fromX)**2 + (toY-fromY)**2);
+    const stopDist = dist - CONFIG.nodeRadius - 5; 
+    
+    if (stopDist <= 0) return;
+
+    const endX = fromX + Math.cos(angle) * stopDist;
+    const endY = fromY + Math.sin(angle) * stopDist;
+    
+    const startX = fromX + Math.cos(angle) * CONFIG.nodeRadius;
+    const startY = fromY + Math.sin(angle) * CONFIG.nodeRadius;
+
+    ctx.beginPath();
+    ctx.moveTo(startX, startY);
+    
+    if (state.mode === 'chaos') {
+        const midX = (startX + endX) / 2;
+        // Use a fixed control point offset based on y-difference to create consistent curves
+        // This replaces the random bezier that might look like "motion"
+        const curveOffset = (toY - fromY) * 0.2; 
+        ctx.bezierCurveTo(midX, startY + curveOffset, midX, endY - curveOffset, endX, endY);
+    } else {
+        ctx.lineTo(endX, endY);
+    }
+
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.stroke();
+
+    // Arrowhead
+    ctx.beginPath();
+    ctx.moveTo(endX, endY);
+    ctx.lineTo(endX - headlen * Math.cos(angle - Math.PI / 6), endY - headlen * Math.sin(angle - Math.PI / 6));
+    ctx.lineTo(endX - headlen * Math.cos(angle + Math.PI / 6), endY - headlen * Math.sin(angle + Math.PI / 6));
+    ctx.fillStyle = color;
+    ctx.fill();
+}
+
+/**
+ * Draw Function (No loop needed, just call on state change)
+ */
+function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    state.lines.forEach(line => {
+        const isOptimized = state.mode === 'optimized';
+        
+        let color, width;
+        if (isOptimized) {
+            color = '#34d399'; 
+            width = 4;
+        } else {
+            color = 'rgba(148, 163, 184, 0.3)'; 
+            width = 2;
+        }
+
+        drawArrow(ctx, line.from.x, line.from.y, line.to.x, line.to.y, color, width);
+    });
+}
+
+// Start
+init();
+
+</script>
+</body>
+</html>
